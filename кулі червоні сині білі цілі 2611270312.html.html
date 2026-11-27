@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>КУЛІ І ЦІЛІ 2Д</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;user-select:none}
+html,body{margin:0;padding:0;width:100%;height:100%;position:fixed;inset:0;overflow:hidden;
+  background:#151b20;color:#fff;font-family:Arial;touch-action:none;overscroll-behavior:none}
+#app{position:relative;height:100%;height:100dvh;display:flex;flex-direction:column;touch-action:none}
+
+header{flex:0 0 auto;height:58px;background:#202a34;display:flex;align-items:center;
+  justify-content:space-between;gap:4px;padding:0 4px;text-align:center}
+header>div{flex:1 1 0;min-width:0}
+header>div.mid{flex:2 1 0}
+h3{margin:0;color:#ffc84a;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.score{font-size:15px;font-weight:bold}
+.small{font-size:9px;color:#d7dee5;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+#field{flex:1 1 auto;min-height:0;min-width:0;position:relative;touch-action:none}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+#controls{flex:0 0 auto;height:118px;background:#202a34;display:flex;align-items:center;
+  justify-content:space-around;gap:3px;padding:4px}
+button{border:1px solid #e8b94c;border-radius:8px;background:#75431d;color:#fff;font-weight:bold;
+  padding:8px 5px;font-size:10px;line-height:1.12;touch-action:manipulation}
+button:active{background:#d58a24}
+#power{width:88px;accent-color:orange;touch-action:manipulation}
+#bottom{flex:0 0 auto;height:16px;text-align:center;font-size:8px;color:#cfd6dd;
+  line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 6px}
+#fsBtn{flex:0 0 auto;border:1px solid #e8b94c;background:#75431d;color:#fff;border-radius:6px;
+  padding:3px 7px;font-size:13px;line-height:1;font-weight:bold;margin-left:2px}
+#panBtn.active{background:#d58a24}
+
+@media (orientation:landscape){
+  #app{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto 1fr;
+    grid-template-areas:"h h" "c f"}
+  header{grid-area:h;height:34px;padding:0 5px}
+  #field{grid-area:f}
+  #controls{grid-area:c;flex-direction:column;width:104px;height:auto;
+    padding:5px;gap:4px;justify-content:center}
+  #bottom{display:none}
+  h3{font-size:11px}
+  .score{font-size:13px}
+  .small{font-size:7px;line-height:1.15}
+  button{padding:5px 4px;font-size:9px}
+  #power{width:86px}
+  #fsBtn{padding:2px 5px;font-size:12px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="score" style="color:#ff5757">🔴 <span id="rs">0</span>
+      <div class="small">Історія <span id="rh">0</span></div>
+    </div>
+    <div class="mid">
+      <h3>КУЛІ І ЦІЛІ 2Д</h3>
+      <div class="small" id="modeText">Людина vs Людина</div>
+      <div class="small" id="turnText">Хід: 🔴 №1</div>
+    </div>
+    <div class="score" style="color:#62aaff">🔵 <span id="bs">0</span>
+      <div class="small">Історія <span id="bh">0</span></div>
+    </div>
+    <button id="fsBtn" title="На весь екран">⛶</button>
+  </header>
+
+  <div id="field"><canvas id="c"></canvas></div>
+
+  <div id="controls">
+    <button onclick="newGame()">НОВА<br>ГРА</button>
+    <button onclick="changeMode()">РЕЖИМ</button>
+    <div style="text-align:center;display:flex;flex-direction:column;align-items:center;gap:1px">
+      <div class="small">СИЛА <b id="pv">60%</b></div>
+      <input id="power" type="range" min="5" max="100" value="60">
+    </div>
+    <button onclick="hit()">УДАР</button>
+    <button onclick="pass()">ПАС</button>
+    <button id="panBtn" onclick="togglePan()">СКРОЛ</button>
+  </div>
+
+  <div id="bottom">Фіолетова ціль — червоні (+) · Оранжева — сині (+) · Чужа ціль — мінус</div>
+</div>
+
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const powerEl = document.getElementById("power");
+
+let W = 0, H = 0, D = 1;
+let balls = [], targets = [];
+let red = 0, blue = 0, redHistory = 0, blueHistory = 0;
+let turn = 1, mode = 1, selected = null, aim = null;
+let last = 0, R = 5, diam = 10;
+let moveNo = 1, needSettle = false, started = false;
+
+/* Панорамування / скрол */
+let panActive = false, panX = 0, panY = 0, panDrag = null;
+
+/* Множник сили */
+let multiplier = 1, multDragging = false;
+
+/* Смуга внизу полотна */
+const SLIDER_ZONE = 46;
+
+/* 5 кілець: індекс 0 — центр, 4 — край */
+const WHITE_PTS = [5, 4, 3, 2, 1];            // біла куля у ціль
+const OWN_PTS   = [0.05, 0.04, 0.03, 0.02, 0.01]; // своя кольорова
+const OPP_PTS   = [0.5, 0.4, 0.3, 0.2, 0.1];      // чужа кольорова
+
+/* Палітри (pal[0] — центр, pal[4] — край) */
+const PURPLE_PAL = ["#e0b0ff","#c77dff","#9d4edd","#7b2cbf","#3c096c"];
+const ORANGE_PAL = ["#fff2cc","#ffd966","#ffb347","#e07b00","#8b4000"];
+
+const rand = (a, b) => a + Math.random() * (b - a);
+function table() {
+  return { x: 5, y: 5, w: Math.max(0, W - 10), h: Math.max(0, H - 10 - SLIDER_ZONE) };
+}
+
+/* ---------- ЦІЛІ ---------- */
+function setupTargets() {
+  const t = table();
+  const rr = Math.max(18, Math.min(diam * 8, W * 0.17, (t.h - 24) / 5.6));
+  targets = [
+    { x: W / 2, y: t.y + rr + 6, r: rr, purple: true,  team: 1 }, // верх — фіолетова (червоні)
+    { x: W / 2, y: t.y + t.h - rr - 6, r: rr, purple: false, team: 2 } // низ — оранжева (сині)
+  ];
+}
+
+/* ---------- КУЛІ ---------- */
+function makeBall(team, x, y) {
+  return { x, y, vx: 0, vy: 0, r: R, team, n: Math.floor(rand(1, 16)), flash: 0 };
+}
+function insideTable(x, y, r) {
+  const t = table();
+  return x >= t.x + r && x <= t.x + t.w - r && y >= t.y + r && y <= t.y + t.h - r;
+}
+function offTargets(x, y, r) {
+  return targets.every(tg => Math.hypot(tg.x - x, tg.y - y) > tg.r + r + 2);
+}
+function freeSpot(x, y, r = R) {
+  if (!insideTable(x, y, r)) return false;
+  if (!offTargets(x, y, r)) return false;
+  for (const b of balls) if (Math.hypot(b.x - x, b.y - y) <= r + b.r + 1.5) return false;
+  return true;
+}
+
+/* ---------- НОВА ГРА ---------- */
+function newGame() {
+  if (W < 20 || H < 20) return;
+  red = blue = redHistory = blueHistory = 0;
+  moveNo = 1;
+  balls = [];
+  selected = null; aim = null;
+  turn = 1;
+  needSettle = false;
+  panX = 0; panY = 0; panActive = false; panDrag = null;
+  multiplier = 1; multDragging = false;
+  document.getElementById("panBtn").classList.remove("active");
+
+  setupTargets();
+  const t = table();
+
+  let count = 0, guard = 0;
+  while (count < 50 && guard < 60000) {
+    guard++;
+    const x = rand(t.x + R + 3, t.x + t.w - R - 3);
+    const y = rand(t.y + R + 3, t.y + t.h - R - 3);
+    if (freeSpot(x, y)) { balls.push(makeBall(count % 2 + 1, x, y)); count++; }
+  }
+  let wc = 0; guard = 0;
+  while (wc < 5 && guard < 60000) {
+    guard++;
+    const x = rand(t.x + R + 4, t.x + t.w - R - 4);
+    const y = rand(t.y + R + 4, t.y + t.h - R - 4);
+    if (freeSpot(x, y)) { balls.push(makeBall(0, x, y)); wc++; }
+  }
+
+  update();
+  draw();
+}
+
+/* ---------- РЕЖИМ / ПАС / ІНФО ---------- */
+function changeMode() {
+  mode = mode === 1 ? 2 : 1;
+  document.getElementById("modeText").textContent =
+    mode === 1 ? "Людина vs Людина" : "Людина vs Комп'ютер";
+  update();
+}
+function pass() {
+  if (moving()) return;
+  selected = null; aim = null;
+  moveNo++;
+  turn = 3 - turn;
+  update();
+}
+function fmt(n) {
+  if (Math.abs(n - Math.round(n)) < 0.001) return n.toFixed(0);
+  return n.toFixed(2);
+}
+function update() {
+  document.getElementById("rs").textContent = fmt(red);
+  document.getElementById("bs").textContent = fmt(blue);
+  document.getElementById("rh").textContent = fmt(redHistory);
+  document.getElementById("bh").textContent = fmt(blueHistory);
+  document.getElementById("pv").textContent = powerEl.value + "%";
+  document.getElementById("turnText").textContent =
+    "Хід: " + (turn === 1 ? "🔴" : "🔵") + " · №" + moveNo + " · ×" + multiplier;
+}
+powerEl.oninput = update;
+
+function togglePan() {
+  panActive = !panActive;
+  document.getElementById("panBtn").classList.toggle("active", panActive);
+  if (panActive) { selected = null; aim = null; }
+}
+
+/* ---------- РУХ / КООРДИНАТИ ---------- */
+function moving() {
+  return balls.some(b => Math.abs(b.vx) + Math.abs(b.vy) > .08);
+}
+function screenPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function worldPos(e) {
+  const sp = screenPos(e);
+  return { x: sp.x - panX, y: sp.y - panY };
+}
+const EDGE = 38;
+function nearEdge(b) {
+  return b.x < EDGE || b.x > W - EDGE || b.y < EDGE || b.y > H - EDGE;
+}
+function nearest(x, y) {
+  let best = null, dist = Math.max(28, diam * 3.2);
+  for (const b of balls) {
+    if (b.team !== turn) continue;
+    const d = Math.hypot(b.x - x, b.y - y);
+    if (d < dist) { dist = d; best = b; }
+  }
+  return best;
+}
+
+/* ---------- СЛАЙДЕР МНОЖНИКА ---------- */
+function sliderGeom() {
+  return { x1: W * 0.10, x2: W * 0.90, y: H - 22 };
+}
+function onSlider(sp) {
+  const g = sliderGeom();
+  return Math.abs(sp.y - g.y) < 22 && sp.x > g.x1 - 22 && sp.x < g.x2 + 22;
+}
+function sliderValue(sp) {
+  const g = sliderGeom();
+  const t = (sp.x - g.x1) / (g.x2 - g.x1);
+  return Math.round(1 + Math.max(0, Math.min(1, t)) * 49);
+}
+
+/* ---------- ПОДІЇ ---------- */
+canvas.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  const sp = screenPos(e);
+
+  if (onSlider(sp)) {
+    multDragging = true;
+    multiplier = sliderValue(sp);
+    update();
+    return;
+  }
+
+  if (panActive) {
+    panDrag = { cx: e.clientX, cy: e.clientY, px: panX, py: panY };
+    return;
+  }
+
+  if (moving() || (mode === 2 && turn === 2)) return;
+  const p = worldPos(e);
+  if (selected) {
+    aim = p;
+  } else {
+    selected = nearest(p.x, p.y);
+    if (selected) aim = { x: p.x, y: p.y };
+  }
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+});
+canvas.addEventListener("pointermove", e => {
+  e.preventDefault();
+  if (multDragging) { multiplier = sliderValue(screenPos(e)); update(); return; }
+  if (panDrag) {
+    panX = panDrag.px + (e.clientX - panDrag.cx);
+    panY = panDrag.py + (e.clientY - panDrag.cy);
+    panX = Math.max(-280, Math.min(280, panX));
+    panY = Math.max(-280, Math.min(280, panY));
+    return;
+  }
+  if (selected) aim = worldPos(e);
+});
+canvas.addEventListener("pointerup", e => {
+  if (multDragging) { multDragging = false; return; }
+  if (panDrag) { panDrag = null; return; }
+  if (selected) aim = worldPos(e);
+});
+
+/* ---------- УДАР ---------- */
+function hit() {
+  if (!selected || !aim || moving() || (mode === 2 && turn === 2)) return;
+  const inv = nearEdge(selected);
+  let dx, dy;
+  if (inv) { dx = aim.x - selected.x; dy = aim.y - selected.y; }
+  else     { dx = selected.x - aim.x; dy = selected.y - aim.y; }
+  const len = Math.hypot(dx, dy);
+  if (len < 3) return;
+
+  const p = Number(powerEl.value) / 100;
+  let speed = Math.min(16, len * .09) * p * multiplier;
+  speed = Math.min(55, speed);
+
+  selected.vx = dx / len * speed;
+  selected.vy = dy / len * speed;
+  selected = null; aim = null;
+  moveNo++;
+  turn = 3 - turn;
+  needSettle = true;
+  update();
+}
+
+/* ---------- ФІЗИКА (з суб-кроками) ---------- */
+function physicsStep(dt) {
+  const t = table();
+  for (const b of balls) {
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    const fr = Math.pow(.987, dt);
+    b.vx *= fr; b.vy *= fr;
+    if (Math.abs(b.vx) < .02) b.vx = 0;
+    if (Math.abs(b.vy) < .02) b.vy = 0;
+    if (b.flash > 0) b.flash *= Math.pow(.9, dt);
+    if (b.x < t.x + b.r) { b.x = t.x + b.r; b.vx = Math.abs(b.vx) * .86; }
+    if (b.x > t.x + t.w - b.r) { b.x = t.x + t.w - b.r; b.vx = -Math.abs(b.vx) * .86; }
+    if (b.y < t.y + b.r) { b.y = t.y + b.r; b.vy = Math.abs(b.vy) * .86; }
+    if (b.y > t.y + t.h - b.r) { b.y = t.y + t.h - b.r; b.vy = -Math.abs(b.vy) * .86; }
+  }
+  for (let i = 0; i < balls.length; i++) {
+    const a = balls[i];
+    for (let j = i + 1; j < balls.length; j++) {
+      const b = balls[j];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy);
+      if (d === 0) { dx = 0.01; d = 0.01; }
+      if (d >= a.r + b.r) continue;
+      const nx = dx / d, ny = dy / d;
+      const ov = (a.r + b.r - d) / 2;
+      a.x -= nx * ov; a.y -= ny * ov;
+      b.x += nx * ov; b.y += ny * ov;
+      const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+      if (rel > 0) {
+        a.vx -= rel * nx * .94; a.vy -= rel * ny * .94;
+        b.vx += rel * nx * .94; b.vy += rel * ny * .94;
+      }
+    }
+  }
+}
+function physics(dt) {
+  let maxV = 0;
+  for (const b of balls) maxV = Math.max(maxV, Math.abs(b.vx) + Math.abs(b.vy));
+  const steps = Math.max(1, Math.min(10, Math.ceil(maxV * dt / 5)));
+  const sub = dt / steps;
+  for (let s = 0; s < steps; s++) physicsStep(sub);
+}
+
+/* ---------- ЗАБИВАННЯ ---------- */
+function getRingIndex(d, radius) {
+  if (d > radius + 1) return -1;
+  const f = d / radius;
+  if (f <= 0.2) return 0;
+  if (f <= 0.4) return 1;
+  if (f <= 0.6) return 2;
+  if (f <= 0.8) return 3;
+  return 4;
+}
+function ballValue(ball, target, ri) {
+  if (ball.team === 0) return WHITE_PTS[ri];
+  const matchesTarget = (ball.team === 1 && target.purple) || (ball.team === 2 && !target.purple);
+  return matchesTarget ? OWN_PTS[ri] : OPP_PTS[ri];
+}
+function relocate(b) {
+  const t = table();
+  b.vx = 0; b.vy = 0;
+  for (let k = 0; k < 400; k++) {
+    const x = rand(t.x + R + 3, t.x + t.w - R - 3);
+    const y = rand(t.y + R + 3, t.y + t.h - R - 3);
+    if (offTargets(x, y, R) &&
+        balls.every(o => o === b || Math.hypot(o.x - x, o.y - y) > R + o.r + 1.5)) {
+      b.x = x; b.y = y; return;
+    }
+  }
+  for (let gy = t.y + R; gy < t.y + t.h - R; gy += diam * 2) {
+    for (let gx = t.x + R; gx < t.x + t.w - R; gx += diam * 2) {
+      if (offTargets(gx, gy, R) &&
+          balls.every(o => o === b || Math.hypot(o.x - gx, o.y - gy) > R + o.r + 1.5)) {
+        b.x = gx; b.y = gy; return;
+      }
+    }
+  }
+  b.x = W / 2; b.y = H / 2;
+}
+function settle() {
+  let changed = false;
+  const shooter = 3 - turn;                // хто стріляв (1 = червоні, 2 = сині)
+  const shooterPurple = (shooter === 1);
+  const toRelocate = [];
+
+  for (const b of balls) {
+    for (const tg of targets) {
+      const ri = getRingIndex(Math.hypot(b.x - tg.x, b.y - tg.y), tg.r);
+      if (ri < 0) continue;
+      const val = ballValue(b, tg, ri);
+      const inShooterTarget = (tg.purple === shooterPurple);
+      const delta = inShooterTarget ? val : -val;
+      if (shooter === 1) { red += delta; redHistory += delta; }
+      else               { blue += delta; blueHistory += delta; }
+      b.flash = 1;
+      toRelocate.push(b);
+      changed = true;
+      break;
+    }
+  }
+  for (const b of toRelocate) relocate(b);
+  if (changed) update();
+}
+
+/* ---------- КОМП'ЮТЕР (сині) ---------- */
+function computer() {
+  if (mode !== 2 || turn !== 2 || moving() || selected) return;
+  const mine = balls.filter(b => b.team === 2);
+  const whites = balls.filter(b => b.team === 0);
+  if (!mine.length || !whites.length) { pass(); return; }
+  const tg = targets[1];
+
+  let best = null, bestScore = 1e9;
+  for (const w of whites) {
+    const wd = Math.hypot(w.x - tg.x, w.y - tg.y);
+    if (wd < 1) continue;
+    const ux = (tg.x - w.x) / wd, uy = (tg.y - w.y) / wd;
+    for (const q of mine) {
+      const vx = w.x - q.x, vy = w.y - q.y;
+      const l = Math.hypot(vx, vy);
+      if (l < 1) continue;
+      const dot = (vx / l) * ux + (vy / l) * uy;
+      const score = (1 - dot) * 2.2 + l / 260 + wd / 900;
+      if (score < bestScore) { bestScore = score; best = { q, w }; }
+    }
+  }
+  if (!best) { pass(); return; }
+  const { q, w } = best;
+  const ang = Math.atan2(w.y - q.y, w.x - q.x) + (Math.random() - .5) * .1;
+  const speed = Math.min(30, 6 + Math.random() * 2.5);
+  q.vx = Math.cos(ang) * speed;
+  q.vy = Math.sin(ang) * speed;
+  moveNo++;
+  turn = 1;
+  needSettle = true;
+  update();
+}
+
+/* ---------- МАЛЮВАННЯ ---------- */
+function drawTarget(tg) {
+  const pal = tg.purple ? PURPLE_PAL : ORANGE_PAL;
+  for (let i = 4; i >= 0; i--) {
+    const radius = tg.r * (i + 1) / 5;
+    ctx.beginPath();
+    ctx.arc(tg.x, tg.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = pal[i];
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.7)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.fillStyle = tg.purple ? "#ffb3d1" : "#a8e0ff";
+  ctx.font = "bold 9px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(tg.purple ? "ФІОЛЕТОВА 🔴" : "ОРАНЖЕВА 🔵", tg.x, tg.y + tg.r + 12);
+}
+
+function drawBall(b) {
+  const color = b.team === 1 ? "#e51e2b" : b.team === 2 ? "#0867ee" : "#f4f4f4";
+  const g = ctx.createRadialGradient(b.x - R * .4, b.y - R * .5, 1, b.x, b.y, R * 1.3);
+  if (b.team === 0) {
+    g.addColorStop(0, "#fff"); g.addColorStop(.7, "#ededed"); g.addColorStop(1, "#9a9a9a");
+  } else {
+    g.addColorStop(0, "#fff"); g.addColorStop(.25, color);
+    g.addColorStop(.85, color); g.addColorStop(1, "#111");
+  }
+  ctx.save();
+  ctx.shadowColor = "#000"; ctx.shadowBlur = 4;
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(b.x, b.y, R, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineWidth = .7; ctx.stroke();
+  if (b.team === 0) {
+    ctx.strokeStyle = "#ffd000";
+    ctx.lineWidth = Math.max(1.2, R * .5);
+    ctx.beginPath(); ctx.arc(b.x, b.y, R * .68, 0, Math.PI * 2); ctx.stroke();
+    if (b.flash > .02) {
+      ctx.strokeStyle = "rgba(255,255,255," + b.flash.toFixed(2) + ")";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, R + 4 + (1 - b.flash) * 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else {
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(b.x, b.y, R * .45, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#111";
+    ctx.font = "bold " + Math.max(6, R * .8) + "px Arial";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(b.n, b.x, b.y);
+    ctx.textBaseline = "alphabetic";
+  }
+  ctx.restore();
+}
+
+function drawAim() {
+  const inv = nearEdge(selected);
+  let dx, dy;
+  if (inv) { dx = aim.x - selected.x; dy = aim.y - selected.y; }
+  else     { dx = selected.x - aim.x; dy = selected.y - aim.y; }
+  const d = Math.hypot(dx, dy);
+  if (d < 1) return;
+  const ux = dx / d, uy = dy / d;
+  const L = Math.min(110, d);
+  const ex = selected.x + ux * L, ey = selected.y + uy * L;
+
+  ctx.save();
+  ctx.setLineDash([6, 5]);
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(selected.x, selected.y); ctx.lineTo(aim.x, aim.y); ctx.stroke();
+  ctx.restore();
+
+  ctx.strokeStyle = "#fff34a"; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(selected.x + ux * R, selected.y + uy * R);
+  ctx.lineTo(ex, ey); ctx.stroke();
+
+  const ah = 12;
+  ctx.fillStyle = "#fff34a";
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - ux * ah - uy * 6, ey - uy * ah + ux * 6);
+  ctx.lineTo(ex - ux * ah + uy * 6, ey - uy * ah - ux * 6);
+  ctx.closePath(); ctx.fill();
+
+  ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(selected.x, selected.y, R + 3, 0, Math.PI * 2); ctx.stroke();
+
+  if (inv) {
+    ctx.fillStyle = "rgba(255,243,74,.95)";
+    ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+    ctx.fillText("Тягни ВПЕРЕД", selected.x, selected.y - R - 7);
+  }
+}
+
+function drawSlider() {
+  const g = sliderGeom();
+  ctx.fillStyle = "rgba(10,14,20,0.78)";
+  ctx.fillRect(0, H - SLIDER_ZONE, W, SLIDER_ZONE);
+
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(255,255,255,.22)";
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(g.x1, g.y); ctx.lineTo(g.x2, g.y); ctx.stroke();
+
+  const frac = (multiplier - 1) / 49;
+  const hx = g.x1 + frac * (g.x2 - g.x1);
+  ctx.strokeStyle = "#ffc84a";
+  ctx.beginPath(); ctx.moveTo(g.x1, g.y); ctx.lineTo(hx, g.y); ctx.stroke();
+
+  ctx.fillStyle = "#ffc84a";
+  ctx.beginPath(); ctx.arc(hx, g.y, 10, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = "#fff"; ctx.font = "bold 13px Arial"; ctx.textAlign = "center";
+  ctx.fillText("×" + multiplier, hx, g.y - 14);
+
+  ctx.font = "9px Arial"; ctx.fillStyle = "rgba(255,255,255,.55)";
+  ctx.textAlign = "left";  ctx.fillText("×1", g.x1, g.y + 17);
+  ctx.textAlign = "right"; ctx.fillText("×50", g.x2, g.y + 17);
+
+  if (panActive) {
+    ctx.fillStyle = "#ffc84a"; ctx.font = "bold 10px Arial"; ctx.textAlign = "center";
+    ctx.fillText("РЕЖИМ СКРОЛУ — тягни поле пальцем", W / 2, 14);
+  }
+}
+
+function draw() {
+  if (W < 20 || H < 20) return;
+  ctx.clearRect(0, 0, W, H);
+
+  /* Фон (не перекладається) */
+  const wood = ctx.createLinearGradient(0, 0, W, H);
+  wood.addColorStop(0, "#e8a348");
+  wood.addColorStop(.5, "#9c321c");
+  wood.addColorStop(1, "#4b1b10");
+  ctx.fillStyle = wood;
+  ctx.fillRect(-320, -320, W + 640, H + 640);
+
+  const t = table();
+
+  ctx.save();
+  ctx.translate(panX, panY);
+
+  ctx.fillStyle = "#075b39";
+  ctx.fillRect(t.x + 4, t.y + 4, Math.max(0, t.w - 8), Math.max(0, t.h - 8));
+  ctx.strokeStyle = "#e3b65b"; ctx.lineWidth = 3;
+  ctx.strokeRect(t.x + 4, t.y + 4, Math.max(0, t.w - 8), Math.max(0, t.h - 8));
+
+  targets.forEach(drawTarget);
+
+  ctx.fillStyle = "rgba(255,255,255,.55)";
+  ctx.font = "9px Arial"; ctx.textAlign = "left";
+  ctx.fillText("50 куль + 5 білих", 10, 14);
+
+  for (const b of balls) drawBall(b);
+  if (selected && aim) drawAim();
+
+  ctx.restore();
+
+  drawSlider();
+}
+
+/* ---------- ЦИКЛ ---------- */
+function loop(now) {
+  const dt = Math.min((now - last) / 16.67, 2) || 1;
+  last = now;
+  physics(dt);
+  if (needSettle && !moving()) { settle(); needSettle = false; }
+  computer();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+/* ---------- РОЗМІР ---------- */
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  const nw = rect.width, nh = rect.height;
+  if (nw < 20 || nh < 20) return;
+  const oldW = W, oldH = H;
+  D = Math.min(window.devicePixelRatio || 1, 2);
+  W = nw; H = nh;
+  canvas.width = Math.round(W * D);
+  canvas.height = Math.round(H * D);
+  ctx.setTransform(D, 0, 0, D, 0, 0);
+  R = Math.max(2.8, Math.min(W, H) * .012);
+  diam = 2 * R;
+  setupTargets();
+
+  if (oldW > 20 && oldH > 20 && balls.length) {
+    const sx = W / oldW, sy = H / oldH;
+    const t = table();
+    for (const b of balls) {
+      b.x *= sx; b.y *= sy;
+      b.r = R; b.vx = 0; b.vy = 0;
+      b.x = Math.max(t.x + b.r, Math.min(t.x + t.w - b.r, b.x));
+      b.y = Math.max(t.y + b.r, Math.min(t.y + t.h - b.r, b.y));
+    }
+    for (const b of balls) if (!offTargets(b.x, b.y, b.r)) relocate(b);
+  }
+  panX = Math.max(-280, Math.min(280, panX));
+  panY = Math.max(-280, Math.min(280, panY));
+  draw();
+}
+new ResizeObserver(resize).observe(canvas);
+
+/* ---------- ПОВНИЙ ЕКРАН ---------- */
+document.getElementById("fsBtn").addEventListener("click", async () => {
+  try {
+    if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+    if (screen.orientation && screen.orientation.lock) {
+      try { await screen.orientation.lock("landscape"); } catch (_) {}
+    }
+  } catch (_) {}
+});
+
+/* ---------- БЛОКУВАННЯ СКРОЛУ / ЗУМУ ---------- */
+function lockScroll() { if (window.scrollX || window.scrollY) window.scrollTo(0, 0); }
+window.addEventListener("scroll", lockScroll, { passive: false });
+window.addEventListener("resize", () => { lockScroll(); resize(); });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", () => { lockScroll(); resize(); });
+}
+document.addEventListener("touchmove", e => {
+  if (e.target === canvas) e.preventDefault();
+}, { passive: false });
+["gesturestart","gesturechange","gestureend"].forEach(ev =>
+  document.addEventListener(ev, e => e.preventDefault(), { passive: false })
+);
+document.addEventListener("dblclick", e => e.preventDefault(), { passive: false });
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+let lastTouchEnd = 0;
+document.addEventListener("touchend", e => {
+  const now = Date.now();
+  if (now - lastTouchEnd <= 300) e.preventDefault();
+  lastTouchEnd = now;
+}, { passive: false });
+
+/* ---------- СТАРТ ---------- */
+function boot() {
+  resize();
+  if (W < 20 || H < 20) { setTimeout(boot, 60); return; }
+  setupTargets();
+  newGame();
+  if (!started) { started = true; requestAnimationFrame(loop); }
+}
+boot();
+</script>
+</body>
+</html>

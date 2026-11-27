@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>GOLDEN STRIKE 3D</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;user-select:none}
+html,body{margin:0;padding:0;width:100%;height:100%;position:fixed;inset:0;overflow:hidden;
+  background:#151b20;color:#fff;font-family:Arial;touch-action:none;overscroll-behavior:none}
+#app{position:relative;height:100%;height:100dvh;display:flex;flex-direction:column;touch-action:none}
+
+header{flex:0 0 auto;height:60px;background:#202a34;display:flex;align-items:center;
+  justify-content:space-between;gap:6px;padding:0 8px;text-align:center}
+header>div{flex:1 1 0;min-width:0}
+header>div.mid{flex:2 1 0}
+h3{margin:0;color:#ffc84a;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.score{font-size:16px;font-weight:bold}
+.small{font-size:10px;color:#d7dee5;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+#field{flex:1 1 auto;min-height:0;min-width:0;position:relative;touch-action:none}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+#controls{flex:0 0 auto;height:100px;background:#202a34;display:flex;align-items:center;
+  justify-content:space-around;gap:4px;padding:5px}
+button{border:1px solid #e8b94c;border-radius:9px;background:#75431d;color:#fff;font-weight:bold;
+  padding:10px 7px;font-size:11px;line-height:1.15;touch-action:manipulation}
+button:active{background:#d58a24}
+#power{width:84px;accent-color:orange;touch-action:manipulation}
+#bottom{flex:0 0 auto;height:18px;text-align:center;font-size:9px;color:#cfd6dd;
+  line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 6px}
+
+#fsBtn{position:absolute;top:6px;right:6px;z-index:5;padding:2px 7px;font-size:12px;
+  border-radius:7px;opacity:.75}
+
+@media (orientation:landscape){
+  #app{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto 1fr;
+    grid-template-areas:"h h" "c f"}
+  header{grid-area:h;height:40px;padding:0 6px}
+  #field{grid-area:f}
+  #controls{grid-area:c;flex-direction:column;width:112px;height:auto;
+    padding:6px;gap:6px;justify-content:center}
+  #bottom{display:none}
+  h3{font-size:12px}
+  .score{font-size:14px}
+  .small{font-size:8px;line-height:1.2}
+  button{padding:7px 5px;font-size:10px}
+  #power{width:94px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="score" style="color:#ff5757">🔴 <span id="rs">0</span>
+      <div class="small">Історія <span id="rh">0</span></div>
+    </div>
+    <div class="mid">
+      <h3>GOLDEN STRIKE 3D</h3>
+      <div class="small" id="modeText">Людина vs Людина</div>
+      <div class="small" id="turnText">Хід: 🔴 червоні · №1</div>
+    </div>
+    <div class="score" style="color:#62aaff">🔵 <span id="bs">0</span>
+      <div class="small">Історія <span id="bh">0</span></div>
+    </div>
+  </header>
+
+  <div id="field">
+    <canvas id="c"></canvas>
+    <button id="fsBtn" title="На весь екран / ландшафт">⛶</button>
+  </div>
+
+  <div id="controls">
+    <button onclick="newGame()">НОВА<br>ГРА</button>
+    <button onclick="changeMode()">РЕЖИМ</button>
+    <div style="text-align:center">
+      <div class="small">СИЛА <b id="pv">60%</b></div>
+      <input id="power" type="range" min="5" max="100" value="60">
+    </div>
+    <button onclick="hit()">ЗОЛОТИЙ<br>УДАР</button>
+    <button onclick="pass()">ПАС</button>
+  </div>
+
+  <div id="bottom">Білі кулі забивають у ціль · очки отримує той, хто торкнувся останнім</div>
+</div>
+
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const powerEl = document.getElementById("power");
+
+let W = 0, H = 0, D = 1;
+let balls = [], targets = [];
+let red = 0, blue = 0, redHistory = 0, blueHistory = 0;
+let turn = 1, mode = 1, selected = null, aim = null;
+let last = 0, R = 5, diam = 10;
+let moveNo = 1, needSettle = false, started = false;
+
+const RINGS  = [1, 3, 5, 7, 9, 11];
+const VALUES = [1, .3, .1, .03, .01, .003];
+/* ОДНАКОВА палітра для обох мішеней */
+const RING_COLORS = ["#fff200", "#ffc400", "#ffa000", "#e07b00", "#b85c00", "#efe6cc"];
+const EDGE = 38; // ~1 см
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const table = () => ({ x: 5, y: 5, w: Math.max(0, W - 10), h: Math.max(0, H - 10) });
+
+/* ---------------- ЦІЛІ ---------------- */
+function setupTargets() {
+  const t = table();
+  const rr = Math.max(22, Math.min(diam * 11, W * 0.20, (t.h - 14) / 4.4));
+  targets = [
+    { x: W / 2, y: t.y + rr + 4, r: rr },
+    { x: W / 2, y: t.y + t.h - rr - 4, r: rr }
+  ];
+}
+
+/* ---------------- КУЛІ ---------------- */
+function makeBall(team, x, y) {
+  return {
+    x, y, vx: 0, vy: 0, r: R, team,
+    n: Math.floor(rand(1, 16)),
+    owner: 0,        // 0 = нейтральна, 1 = червоні, 2 = сині
+    flash: 0
+  };
+}
+
+function insideTable(x, y, r) {
+  const t = table();
+  return x >= t.x + r && x <= t.x + t.w - r && y >= t.y + r && y <= t.y + t.h - r;
+}
+function offTargets(x, y, r) {
+  return targets.every(tg => Math.hypot(tg.x - x, tg.y - y) > tg.r + r + 2);
+}
+function freeSpot(x, y, r = R) {
+  if (!insideTable(x, y, r)) return false;
+  if (!offTargets(x, y, r)) return false;
+  for (const b of balls) {
+    if (Math.hypot(b.x - x, b.y - y) <= r + b.r + 1.5) return false;
+  }
+  return true;
+}
+
+/* ---------------- НОВА ГРА ---------------- */
+function newGame() {
+  if (W < 20 || H < 20) return;
+  red = blue = redHistory = blueHistory = 0;
+  moveNo = 1;
+  balls = [];
+  selected = null; aim = null;
+  turn = 1;
+  needSettle = false;
+
+  setupTargets();
+  const t = table();
+
+  /* 50 кольорових куль — жодна не на мішені */
+  let count = 0, guard = 0;
+  while (count < 50 && guard < 40000) {
+    guard++;
+    const x = rand(t.x + R + 3, t.x + t.w - R - 3);
+    const y = rand(t.y + R + 3, t.y + t.h - R - 3);
+    if (freeSpot(x, y)) { balls.push(makeBall(count % 2 + 1, x, y)); count++; }
+  }
+
+  /* 5 білих забивних куль — теж поза мішенями */
+  let wc = 0; guard = 0;
+  while (wc < 5 && guard < 40000) {
+    guard++;
+    const x = rand(t.x + R + 4, t.x + t.w - R - 4);
+    const y = rand(t.y + R + 4, t.y + t.h - R - 4);
+    if (freeSpot(x, y)) { balls.push(makeBall(0, x, y)); wc++; }
+  }
+
+  update();
+  draw();
+}
+
+/* ---------------- РЕЖИМ / ПАС / ІНФО ---------------- */
+function changeMode() {
+  mode = mode === 1 ? 2 : 1;
+  document.getElementById("modeText").textContent =
+    mode === 1 ? "Людина vs Людина" : "Людина vs Комп'ютер";
+  update();
+}
+function pass() {
+  if (moving()) return;
+  selected = null; aim = null;
+  moveNo++;
+  turn = 3 - turn;
+  update();
+}
+function update() {
+  document.getElementById("rs").textContent = red.toFixed(2);
+  document.getElementById("bs").textContent = blue.toFixed(2);
+  document.getElementById("rh").textContent = redHistory.toFixed(2);
+  document.getElementById("bh").textContent = blueHistory.toFixed(2);
+  document.getElementById("pv").textContent = powerEl.value + "%";
+  document.getElementById("turnText").textContent =
+    "Хід: " + (turn === 1 ? "🔴 червоні" : "🔵 сині") + " · №" + moveNo;
+}
+powerEl.oninput = update;
+
+/* ---------------- РУХ / ВИБІР ---------------- */
+function moving() {
+  return balls.some(b => Math.abs(b.vx) + Math.abs(b.vy) > .08);
+}
+function nearest(x, y) {
+  let best = null, dist = Math.max(26, diam * 3);
+  for (const b of balls) {
+    if (b.team !== turn) continue;
+    const d = Math.hypot(b.x - x, b.y - y);
+    if (d < dist) { dist = d; best = b; }
+  }
+  return best;
+}
+function pos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function nearEdge(b) {
+  return b.x < EDGE || b.x > W - EDGE || b.y < EDGE || b.y > H - EDGE;
+}
+
+canvas.addEventListener("pointerdown", e => {
+  if (moving() || (mode === 2 && turn === 2)) return;
+  e.preventDefault();
+  const p = pos(e);
+  if (selected) {
+    aim = p;
+  } else {
+    selected = nearest(p.x, p.y);
+    if (selected) aim = { x: p.x, y: p.y };
+  }
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+});
+canvas.addEventListener("pointermove", e => {
+  if (!selected) return;
+  e.preventDefault();
+  aim = pos(e);
+});
+canvas.addEventListener("pointerup", e => {
+  if (selected) aim = pos(e);
+});
+
+/* ---------------- УДАР ---------------- */
+function hit() {
+  if (!selected || !aim || moving() || (mode === 2 && turn === 2)) return;
+
+  const inv = nearEdge(selected); // біля краю — штовхаємо ВПЕРЕД
+  let dx, dy;
+  if (inv) { dx = aim.x - selected.x; dy = aim.y - selected.y; }
+  else     { dx = selected.x - aim.x; dy = selected.y - aim.y; }
+
+  const len = Math.hypot(dx, dy);
+  if (len < 3) return;
+
+  const p = Number(powerEl.value) / 100;
+  const speed = Math.min(16, len * .09) * p;
+  selected.vx = dx / len * speed;
+  selected.vy = dy / len * speed;
+
+  selected = null; aim = null;
+  moveNo++;
+  turn = 3 - turn;
+  needSettle = true;
+  update();
+}
+
+/* ---------------- ФІЗИКА ---------------- */
+function physics(dt) {
+  const t = table();
+
+  for (const b of balls) {
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+
+    const fr = Math.pow(.987, dt);
+    b.vx *= fr; b.vy *= fr;
+    if (Math.abs(b.vx) < .02) b.vx = 0;
+    if (Math.abs(b.vy) < .02) b.vy = 0;
+    if (b.flash > 0) b.flash *= Math.pow(.9, dt);
+
+    if (b.x < t.x + b.r) { b.x = t.x + b.r; b.vx = Math.abs(b.vx) * .86; }
+    if (b.x > t.x + t.w - b.r) { b.x = t.x + t.w - b.r; b.vx = -Math.abs(b.vx) * .86; }
+    if (b.y < t.y + b.r) { b.y = t.y + b.r; b.vy = Math.abs(b.vy) * .86; }
+    if (b.y > t.y + t.h - b.r) { b.y = t.y + t.h - b.r; b.vy = -Math.abs(b.vy) * .86; }
+  }
+
+  for (let i = 0; i < balls.length; i++) {
+    const a = balls[i];
+    for (let j = i + 1; j < balls.length; j++) {
+      const b = balls[j];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy);
+      if (d === 0) { dx = 0.01; d = 0.01; }
+      if (d >= a.r + b.r) continue;
+
+      const nx = dx / d, ny = dy / d;
+      const ov = (a.r + b.r - d) / 2;
+      a.x -= nx * ov; a.y -= ny * ov;
+      b.x += nx * ov; b.y += ny * ov;
+
+      const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+      if (rel > 0) {
+        a.vx -= rel * nx * .94; a.vy -= rel * ny * .94;
+        b.vx += rel * nx * .94; b.vy += rel * ny * .94;
+
+        /* Біла куля отримує колір того, хто її штовхнув */
+        if (a.team === 0 && b.team !== 0) { a.owner = b.team; a.flash = .6; }
+        if (b.team === 0 && a.team !== 0) { b.owner = a.team; b.flash = .6; }
+      }
+    }
+  }
+}
+
+/* ---------------- ЗАБИВАННЯ / ПЕРЕМІЩЕННЯ ---------------- */
+function targetIndexAt(b) {
+  for (let i = 0; i < targets.length; i++) {
+    if (Math.hypot(b.x - targets[i].x, b.y - targets[i].y) <= targets[i].r) return i;
+  }
+  return -1;
+}
+function ringValue(b, tg) {
+  const d = Math.hypot(b.x - tg.x, b.y - tg.y);
+  const s = tg.r / 11;
+  for (let i = 0; i < 6; i++) if (d <= RINGS[i] * s) return VALUES[i];
+  return 0;
+}
+function relocate(b) {
+  const t = table();
+  b.vx = 0; b.vy = 0; b.owner = 0;
+
+  for (let k = 0; k < 250; k++) {
+    const x = rand(t.x + R + 3, t.x + t.w - R - 3);
+    const y = rand(t.y + R + 3, t.y + t.h - R - 3);
+    if (offTargets(x, y, R) &&
+        balls.every(o => o === b || Math.hypot(o.x - x, o.y - y) > R + o.r + 1.5)) {
+      b.x = x; b.y = y; return;
+    }
+  }
+  /* резервний варіант — сітка */
+  for (let gy = t.y + R; gy < t.y + t.h - R; gy += diam * 2) {
+    for (let gx = t.x + R; gx < t.x + t.w - R; gx += diam * 2) {
+      if (offTargets(gx, gy, R) &&
+          balls.every(o => o === b || Math.hypot(o.x - gx, o.y - gy) > R + o.r + 1.5)) {
+        b.x = gx; b.y = gy; return;
+      }
+    }
+  }
+  b.x = W / 2; b.y = H / 2;
+}
+
+function settle() {
+  let changed = false;
+  for (const b of balls) {
+    const ti = targetIndexAt(b);
+    if (ti < 0) continue;
+
+    /* біла куля в цілі: очки отримує власник */
+    if (b.team === 0 && b.owner) {
+      const v = ringValue(b, targets[ti]);
+      if (v > 0) {
+        if (b.owner === 1) { red += v; redHistory += v; }
+        else               { blue += v; blueHistory += v; }
+        b.flash = 1;
+        changed = true;
+      }
+    }
+    /* все з цілей знімається і кладеться випадково, але не на ціль */
+    relocate(b);
+  }
+  if (changed) update();
+}
+
+/* ---------------- КОМП'ЮТЕР ---------------- */
+function computer() {
+  if (mode !== 2 || turn !== 2 || moving() || selected) return;
+
+  const mine = balls.filter(b => b.team === 2);
+  const whites = balls.filter(b => b.team === 0);
+  if (!mine.length || !whites.length) { pass(); return; }
+
+  let best = null, bestScore = 1e9;
+  for (const w of whites) {
+    for (const tg of targets) {
+      const wd = Math.hypot(w.x - tg.x, w.y - tg.y);
+      if (wd < 1) continue;
+      const dirx = (tg.x - w.x) / wd, diry = (tg.y - w.y) / wd;
+
+      for (const q of mine) {
+        const vx = w.x - q.x, vy = w.y - q.y;
+        const l = Math.hypot(vx, vy);
+        if (l < 1) continue;
+        const dot = (vx / l) * dirx + (vy / l) * diry;
+        const score = (1 - dot) * 2.2 + l / 260 + wd / 900;
+        if (score < bestScore) { bestScore = score; best = { q, w }; }
+      }
+    }
+  }
+  if (!best) { pass(); return; }
+
+  const { q, w } = best;
+  let ang = Math.atan2(w.y - q.y, w.x - q.x);
+  ang += (Math.random() - .5) * 0.10;
+  const speed = 6 + Math.random() * 2.2;
+  q.vx = Math.cos(ang) * speed;
+  q.vy = Math.sin(ang) * speed;
+
+  moveNo++;
+  turn = 1;
+  needSettle = true;
+  update();
+}
+
+/* ---------------- МАЛЮВАННЯ ---------------- */
+function drawTarget(tg) {
+  const s = tg.r / 11;
+  for (let j = 5; j >= 0; j--) {
+    ctx.beginPath();
+    ctx.arc(tg.x, tg.y, RINGS[j] * s, 0, Math.PI * 2);
+    ctx.fillStyle = RING_COLORS[j];
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,.7)";
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(tg.x, tg.y, s * .55, 0, Math.PI * 2);
+  ctx.fillStyle = "#171717";
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  ctx.font = "bold 10px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText("ЦІЛЬ", tg.x, tg.y + tg.r + 13);
+}
+
+function drawBall(b) {
+  const color = b.team === 1 ? "#e51e2b" : b.team === 2 ? "#0867ee" : "#f4f4f4";
+  const g = ctx.createRadialGradient(b.x - R * .4, b.y - R * .5, 1, b.x, b.y, R * 1.3);
+  if (b.team === 0) {
+    g.addColorStop(0, "#fff"); g.addColorStop(.7, "#ededed"); g.addColorStop(1, "#9a9a9a");
+  } else {
+    g.addColorStop(0, "#fff"); g.addColorStop(.25, color);
+    g.addColorStop(.85, color); g.addColorStop(1, "#111");
+  }
+
+  ctx.save();
+  ctx.shadowColor = "#000"; ctx.shadowBlur = 4;
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(b.x, b.y, R, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,.5)";
+  ctx.lineWidth = .7;
+  ctx.stroke();
+
+  if (b.team === 0) {
+    /* колір власника: червоний / синій / золотий (нейтральна) */
+    const oc = b.owner === 1 ? "#ff3b3b" : b.owner === 2 ? "#3b8bff" : "#ffd000";
+    ctx.strokeStyle = oc;
+    ctx.lineWidth = Math.max(1.4, R * .55);
+    ctx.beginPath(); ctx.arc(b.x, b.y, R * .66, 0, Math.PI * 2); ctx.stroke();
+
+    if (b.flash > 0.02) {
+      ctx.strokeStyle = "rgba(255,255,255," + b.flash.toFixed(2) + ")";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, R + 4 + (1 - b.flash) * 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else {
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(b.x, b.y, R * .45, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#111";
+    ctx.font = "bold " + Math.max(6, R * .8) + "px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(b.n, b.x, b.y);
+    ctx.textBaseline = "alphabetic";
+  }
+  ctx.restore();
+}
+
+function drawAim() {
+  const inv = nearEdge(selected);
+  let dx, dy;
+  if (inv) { dx = aim.x - selected.x; dy = aim.y - selected.y; }
+  else     { dx = selected.x - aim.x; dy = selected.y - aim.y; }
+
+  const d = Math.hypot(dx, dy);
+  if (d < 1) return;
+  const ux = dx / d, uy = dy / d;
+  const L = Math.min(110, d);
+  const ex = selected.x + ux * L, ey = selected.y + uy * L;
+
+  /* пунктир до пальця */
+  ctx.save();
+  ctx.setLineDash([6, 5]);
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(selected.x, selected.y);
+  ctx.lineTo(aim.x, aim.y);
+  ctx.stroke();
+  ctx.restore();
+
+  /* стрілка */
+  ctx.strokeStyle = "#fff34a";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(selected.x + ux * R, selected.y + uy * R);
+  ctx.lineTo(ex, ey);
+  ctx.stroke();
+
+  const ah = 12;
+  ctx.fillStyle = "#fff34a";
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - ux * ah - uy * 6, ey - uy * ah + ux * 6);
+  ctx.lineTo(ex - ux * ah + uy * 6, ey - uy * ah - ux * 6);
+  ctx.closePath();
+  ctx.fill();
+
+  /* кільце вибору */
+  ctx.strokeStyle = "rgba(255,255,255,.9)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(selected.x, selected.y, R + 3, 0, Math.PI * 2);
+  ctx.stroke();
+
+  /* підказка біля краю */
+  if (inv) {
+    ctx.fillStyle = "rgba(255,243,74,.95)";
+    ctx.font = "bold 9px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("Тягни ВПЕРЕД", selected.x, selected.y - R - 7);
+  }
+}
+
+function draw() {
+  if (W < 20 || H < 20) return;
+  ctx.clearRect(0, 0, W, H);
+
+  const t = table();
+
+  /* борти */
+  const wood = ctx.createLinearGradient(0, 0, W, H);
+  wood.addColorStop(0, "#e8a348");
+  wood.addColorStop(.5, "#9c321c");
+  wood.addColorStop(1, "#4b1b10");
+  ctx.fillStyle = wood;
+  ctx.fillRect(0, 0, W, H);
+
+  /* стіл */
+  ctx.fillStyle = "#075b39";
+  ctx.fillRect(t.x + 4, t.y + 4, Math.max(0, t.w - 8), Math.max(0, t.h - 8));
+  ctx.strokeStyle = "#e3b65b";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(t.x + 4, t.y + 4, Math.max(0, t.w - 8), Math.max(0, t.h - 8));
+
+  targets.forEach(drawTarget);
+
+  ctx.fillStyle = "rgba(255,255,255,.55)";
+  ctx.font = "10px Arial";
+  ctx.textAlign = "left";
+  ctx.fillText("50 куль + 5 білих", 10, 15);
+
+  for (const b of balls) drawBall(b);
+
+  if (selected && aim) drawAim();
+}
+
+/* ---------------- ЦИКЛ ---------------- */
+function loop(now) {
+  const dt = Math.min((now - last) / 16.67, 2) || 1;
+  last = now;
+
+  physics(dt);
+
+  if (needSettle && !moving()) {
+    settle();
+    needSettle = false;
+  }
+
+  computer();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+/* ---------------- РОЗМІР / ПОВОРОТ ---------------- */
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  const nw = rect.width, nh = rect.height;
+  if (nw < 20 || nh < 20) return;
+
+  const oldW = W, oldH = H, oldR = R;
+  D = Math.min(window.devicePixelRatio || 1, 2);
+  W = nw; H = nh;
+
+  canvas.width = Math.round(W * D);
+  canvas.height = Math.round(H * D);
+  ctx.setTransform(D, 0, 0, D, 0, 0);
+
+  R = Math.max(3, Math.min(W, H) * .012);
+  diam = 2 * R;
+  setupTargets();
+
+  if (oldW > 20 && oldH > 20 && balls.length) {
+    const sx = W / oldW, sy = H / oldH;
+    const t = table();
+
+    for (const b of balls) {
+      b.x *= sx;
+      b.y *= sy;
+      b.r = R;
+      b.vx = 0; b.vy = 0;
+      b.x = Math.max(t.x + b.r, Math.min(t.x + t.w - b.r, b.x));
+      b.y = Math.max(t.y + b.r, Math.min(t.y + t.h - b.r, b.y));
+    }
+    for (const b of balls) {
+      if (!offTargets(b.x, b.y, b.r)) relocate(b);
+    }
+  }
+  draw();
+}
+new ResizeObserver(resize).observe(canvas);
+
+/* ---------------- ПОВНИЙ ЕКРАН / ЛАНДШАФТ ---------------- */
+document.getElementById("fsBtn").addEventListener("click", async () => {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+    if (screen.orientation && screen.orientation.lock) {
+      try { await screen.orientation.lock("landscape"); } catch (_) {}
+    }
+  } catch (_) {}
+});
+
+/* ---------------- БЛОКУВАННЯ СКРОЛУ / ЗУМУ ---------------- */
+document.addEventListener("touchmove", e => {
+  if (e.target === canvas) e.preventDefault();
+}, { passive: false });
+document.addEventListener("gesturestart", e => e.preventDefault(), { passive: false });
+document.addEventListener("dblclick", e => e.preventDefault(), { passive: false });
+
+/* ---------------- СТАРТ ---------------- */
+function boot() {
+  resize();
+  if (W < 20 || H < 20) { setTimeout(boot, 60); return; }
+  setupTargets();
+  newGame();
+  if (!started) {
+    started = true;
+    requestAnimationFrame(loop);
+  }
+}
+boot();
+</script>
+</body>
+</html>
